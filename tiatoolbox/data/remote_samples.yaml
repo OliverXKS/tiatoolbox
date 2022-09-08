@@ -109,3 +109,5 @@ files:
     url: [*modelroot, "predictions/tissue_mask/small_svs_tissue_mask.npy"]
   micronet-output:
     url: [*modelroot, "predictions/nuclei_mask/micronet-output.npy"]
+  nuclick-output:
+    url: [*modelroot, "predictions/nuclei_mask/nuclick-output.npy"]

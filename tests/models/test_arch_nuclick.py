@@ -1,4 +1,4 @@
-"""Unit test package for Unet."""
+"""Unit test package for Nuclick."""
 
 import pathlib
 
@@ -7,8 +7,8 @@ import pytest
 import torch
 
 from tiatoolbox.models.architecture import fetch_pretrained_weights
-from tiatoolbox.models.architecture.unet import UNetModel
-from tiatoolbox.wsicore.wsireader import WSIReader
+from tiatoolbox.models.architecture.nuclick import NuClick
+from tiatoolbox.utils.misc import imread
 
 ON_GPU = False
 
@@ -16,49 +16,49 @@ ON_GPU = False
 
 
 def test_functional_nuclcik(remote_sample, tmp_path):
-    """Tests for unet."""
+    """Tests for nuclick."""
     # convert to pathlib Path to prevent wsireader complaint
-    mini_wsi_svs = pathlib.Path(remote_sample("wsi2_4k_4k_svs"))
+    tile_path = pathlib.Path(remote_sample("patch-extraction-vf"))
+    img = imread(tile_path)
 
     _pretrained_path = f"{tmp_path}/weights.pth"
-    fetch_pretrained_weights("fcn-tissue_mask", _pretrained_path)
+    fetch_pretrained_weights("nuclick_original-pannuke", _pretrained_path)
 
-    reader = WSIReader.open(mini_wsi_svs)
-    with pytest.raises(ValueError, match=r".*Unknown encoder*"):
-        model = UNetModel(3, 2, encoder="resnet101", decoder_block=[3])
-
-    with pytest.raises(ValueError, match=r".*Unknown type of skip connection*"):
-        model = UNetModel(3, 2, encoder="unet", skip_type="attention")
+    with pytest.raises(ValueError, match=r".*input channels number error*"):
+        model = NuClick(num_input_channels=-1, num_output_channels=-1)
 
     # test creation
-    model = UNetModel(5, 5, encoder="resnet50")
-    model = UNetModel(3, 2, encoder="resnet50")
-    model = UNetModel(3, 2, encoder="unet")
+    model = NuClick(num_input_channels=5, num_output_channels=1)
 
     # test inference
-    read_kwargs = {"resolution": 2.0, "units": "mpp", "coord_space": "resolution"}
-    batch = np.array(
-        [
-            # noqa
-            reader.read_bounds([0, 0, 1024, 1024], **read_kwargs),
-            reader.read_bounds([1024, 1024, 2048, 2048], **read_kwargs),
-        ]
-    )
-    batch = torch.from_numpy(batch)
+    # create image patch, inclusion and exclusion maps
+    patch = img[63:191, 750:878, :]
 
-    model = UNetModel(3, 2, encoder="resnet50", decoder_block=[3])
+    inclusion_map = np.zeros((128, 128))
+    inclusion_map[64, 64] = 1
+
+    exclusion_map = np.zeros((128, 128))
+    exclusion_map[68, 82] = 1
+    exclusion_map[72, 102] = 1
+    exclusion_map[52, 48] = 1
+
+    patch = np.float32(patch) / 255.0
+    patch = np.moveaxis(patch, -1, 0)
+    batch = np.concatenate(
+        (patch, inclusion_map[np.newaxis, ...], exclusion_map[np.newaxis, ...]), axis=0
+    )
+
+    batch = torch.from_numpy(batch[np.newaxis, ...])
+
+    model = NuClick(num_input_channels=5, num_output_channels=1)
     pretrained = torch.load(_pretrained_path, map_location="cpu")
     model.load_state_dict(pretrained)
     output = model.infer_batch(model, batch, on_gpu=ON_GPU)
-    output = output[0]
+    postproc_masks = model.postproc(output)
 
-    # run untrained network to test for architecture
-    model = UNetModel(
-        3,
-        2,
-        encoder="unet",
-        decoder_block=[3],
-        encoder_levels=[32, 64],
-        skip_type="concat",
+    gt_path = pathlib.Path(remote_sample("nuclick-output"))
+    gt_mask = np.load(gt_path)
+
+    assert (
+        np.count_nonzero(postproc_masks * gt_mask) / np.count_nonzero(gt_mask) > 0.999
     )
-    output = model.infer_batch(model, batch, on_gpu=ON_GPU)
